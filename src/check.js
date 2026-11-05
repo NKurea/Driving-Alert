@@ -26,13 +26,24 @@ async function saveDebug(page, name) {
   fs.writeFileSync(path.join(DEBUG_DIR, `${name}.html`), await page.content().catch(() => ''));
 }
 
+// 要素をクリックして画面の切り替わりを待つ。
+// 閉じたメニューの中にある(見えない)リンクは、DOM上で直接クリックする。
+async function clickAndWait(page, el) {
+  if (await el.isVisible()) await el.click({ timeout: 10000 });
+  else await el.evaluate((e) => e.click());
+  await page.waitForLoadState('load').catch(() => {});
+  await page.waitForTimeout(1500);
+  await page.waitForLoadState('networkidle').catch(() => {});
+}
+
 async function clickByText(page, pattern) {
-  const target = page
+  const all = page
     .locator('a, button, input[type=button], input[type=submit], [onclick]')
-    .filter({ hasText: pattern })
-    .first();
+    .filter({ hasText: pattern });
+  const visible = all.locator('visible=true').first();
+  const target = (await visible.count()) ? visible : all.first();
   if (await target.count()) {
-    await Promise.all([page.waitForLoadState('networkidle').catch(() => {}), target.click()]);
+    await clickAndWait(page, target);
     return true;
   }
   // input[type=button] は hasText で拾えないので value で探す
@@ -40,7 +51,7 @@ async function clickByText(page, pattern) {
   for (let i = 0; i < (await inputs.count()); i++) {
     const v = (await inputs.nth(i).getAttribute('value')) || '';
     if (pattern.test(v)) {
-      await Promise.all([page.waitForLoadState('networkidle').catch(() => {}), inputs.nth(i).click()]);
+      await clickAndWait(page, inputs.nth(i));
       return true;
     }
   }
