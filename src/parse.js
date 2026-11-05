@@ -28,36 +28,52 @@ function extractSlots() {
   const slots = [];
   let tableFound = false;
 
-  for (const table of tables) {
+  const isDate = (s) => /\d+月\d+日|\d+\/\d+/.test(s);
+  const firstText = (row) => (row && row.cells[0] ? clean(row.cells[0].innerText) : '');
+
+  // 日付だけが縦に並んだテーブル(表が「日付の列」と「時限の表」に分かれている場合)
+  const dateColumns = tables.filter((t) => {
+    const rows = [...t.rows];
+    return (
+      rows.length >= 2 &&
+      rows.every((r) => r.cells.length <= 2) &&
+      rows.filter((r) => isDate(firstText(r))).length >= rows.length / 2
+    );
+  });
+
+  tables.forEach((table, tableIdx) => {
     const rows = [...table.rows];
-    if (rows.length < 2) continue;
     // 時限ヘッダ行: 「8:30」のような時刻を含む行
     const headerIdx = rows.findIndex((r) => /\d{1,2}:\d{2}/.test(r.textContent));
-    if (headerIdx < 0) continue;
-    const headerCells = [...rows[headerIdx].cells];
-    const periods = headerCells.map((c) => clean(c.innerText));
+    if (headerIdx < 0) return;
+    const periods = [...rows[headerIdx].cells].map((c) => clean(c.innerText));
 
-    for (const row of rows.slice(headerIdx + 1)) {
-      const cells = [...row.cells];
-      if (cells.length < 2) continue;
-      const dateText = clean(cells[0].innerText);
-      if (!/\d+月\d+日|\d+\/\d+/.test(dateText)) continue;
+    // 日付が同じ表に無ければ、行数が同じで直前にある「日付の列」と行番号で対応させる
+    const partner = dateColumns
+      .filter((t) => t !== table && t.rows.length === rows.length && tables.indexOf(t) < tableIdx)
+      .pop();
+
+    rows.forEach((row, i) => {
+      if (i <= headerIdx) return;
+      let dateText = firstText(row);
+      let start = 1; // 1列目が日付なので2列目から
+      if (!isDate(dateText)) {
+        if (!partner) return;
+        dateText = firstText(partner.rows[i]);
+        start = 0;
+        if (!isDate(dateText)) return;
+      }
       tableFound = true;
       // colspan を考慮して列番号を数える
       let col = 0;
-      for (const cell of cells) {
-        const span = cell.colSpan || 1;
-        if (col > 0 && isGreen(bgOf(cell))) {
-          slots.push({
-            date: dateText,
-            period: periods[col] || `${col}限`,
-            label: clean(cell.innerText),
-          });
+      for (const cell of row.cells) {
+        if (col >= start && isGreen(bgOf(cell))) {
+          slots.push({ date: dateText, period: periods[col] || `${col + 1}限`, label: clean(cell.innerText) });
         }
-        col += span;
+        col += cell.colSpan || 1;
       }
-    }
-  }
+    });
+  });
   return { tableFound, slots };
 }
 

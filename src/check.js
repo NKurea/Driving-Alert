@@ -26,13 +26,24 @@ async function saveDebug(page, name) {
   fs.writeFileSync(path.join(DEBUG_DIR, `${name}.html`), await page.content().catch(() => ''));
 }
 
+// 要素をクリックして画面の切り替わりを待つ。
+// 閉じたメニューの中にある(見えない)リンクは、DOM上で直接クリックする。
+async function clickAndWait(page, el) {
+  if (await el.isVisible()) await el.click({ timeout: 10000 });
+  else await el.evaluate((e) => e.click());
+  await page.waitForLoadState('load').catch(() => {});
+  await page.waitForTimeout(1500);
+  await page.waitForLoadState('networkidle').catch(() => {});
+}
+
 async function clickByText(page, pattern) {
-  const target = page
+  const all = page
     .locator('a, button, input[type=button], input[type=submit], [onclick]')
-    .filter({ hasText: pattern })
-    .first();
+    .filter({ hasText: pattern });
+  const visible = all.locator('visible=true').first();
+  const target = (await visible.count()) ? visible : all.first();
   if (await target.count()) {
-    await Promise.all([page.waitForLoadState('networkidle').catch(() => {}), target.click()]);
+    await clickAndWait(page, target);
     return true;
   }
   // input[type=button] は hasText で拾えないので value で探す
@@ -40,7 +51,7 @@ async function clickByText(page, pattern) {
   for (let i = 0; i < (await inputs.count()); i++) {
     const v = (await inputs.nth(i).getAttribute('value')) || '';
     if (pattern.test(v)) {
-      await Promise.all([page.waitForLoadState('networkidle').catch(() => {}), inputs.nth(i).click()]);
+      await clickAndWait(page, inputs.nth(i));
       return true;
     }
   }
@@ -69,8 +80,54 @@ async function login(page) {
   }
 }
 
+// ページ本体と iframe の中をすべて読む
 async function readWeek(page) {
-  return page.evaluate(`(${extractSlots.toString()})()`);
+  const result = { tableFound: false, slots: [] };
+  for (const frame of page.frames()) {
+    const r = await frame.evaluate(`(${extractSlots.toString()})()`).catch(() => null);
+    if (!r) continue;
+    result.tableFound ||= r.tableFound;
+    result.slots.push(...r.slots);
+  }
+  return result;
+}
+
+// 表が見つからないときに、原因調査用の画面構造をログに出す(個人情報は出さない)
+async function describePage(page) {
+  const out = [];
+  for (const frame of page.frames()) {
+    const info = await frame
+      .evaluate(() => {
+        const t = (s) => (s || '').replace(/\s+/g, ' ').trim();
+        const tables = [...document.querySelectorAll('table')].map((tb) => {
+          const rows = [...tb.rows];
+          return {
+            rows: rows.length,
+            cols: rows[0] ? rows[0].cells.length : 0,
+            hasTime: /\d{1,2}:\d{2}/.test(tb.textContent),
+            hasDate: /\d+月\d+日/.test(tb.textContent),
+            firstCell: rows[1] && rows[1].cells[0] ? t(rows[1].cells[0].innerText).slice(0, 15) : '',
+          };
+        });
+        const dateEls = [...document.querySelectorAll('body *')].filter(
+          (e) => e.children.length === 0 && /^\d+月\d+日/.test(t(e.textContent)),
+        );
+        return {
+          path: location.pathname,
+          title: document.title,
+          tables,
+          dateElements: dateEls.length,
+          dateTags: [...new Set(dateEls.slice(0, 5).map((e) => `${e.tagName}.${e.className}`))],
+          links: [...document.querySelectorAll('a, button')]
+            .map((a) => t(a.innerText))
+            .filter((x) => x && x.length <= 20)
+            .slice(0, 40),
+        };
+      })
+      .catch((e) => ({ error: e.message }));
+    out.push(info);
+  }
+  console.log('画面の構造:', JSON.stringify(out, null, 1));
 }
 
 async function collectSlots(page) {
@@ -81,7 +138,10 @@ async function collectSlots(page) {
     await saveDebug(page, '3-reserve');
     result = await readWeek(page);
   }
-  if (!result.tableFound) throw new Error('技能予約の表が見つかりませんでした');
+  if (!result.tableFound) {
+    await describePage(page);
+    throw new Error('技能予約の表が見つかりませんでした');
+  }
 
   const all = [...result.slots];
   for (let w = 1; w < WEEKS; w++) {
