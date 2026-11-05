@@ -28,14 +28,13 @@ function extractSlots() {
   const slots = [];
   let tableFound = false;
 
+  // 時限ヘッダ(「8:30」など)は別テーブルに分かれていることもあるので、直前のものを引き継ぐ
+  let periods = [];
   for (const table of tables) {
     const rows = [...table.rows];
-    if (rows.length < 2) continue;
-    // 時限ヘッダ行: 「8:30」のような時刻を含む行
+    if (!rows.length) continue;
     const headerIdx = rows.findIndex((r) => /\d{1,2}:\d{2}/.test(r.textContent));
-    if (headerIdx < 0) continue;
-    const headerCells = [...rows[headerIdx].cells];
-    const periods = headerCells.map((c) => clean(c.innerText));
+    if (headerIdx >= 0) periods = [...rows[headerIdx].cells].map((c) => clean(c.innerText));
 
     for (const row of rows.slice(headerIdx + 1)) {
       const cells = [...row.cells];
