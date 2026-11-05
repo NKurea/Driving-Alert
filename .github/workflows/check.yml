@@ -1,0 +1,74 @@
+name: 技能予約チェック
+
+on:
+  schedule:
+    # 10分おき・日本時間 6:00〜22:59 (UTC 21:00〜13:59)
+    - cron: '*/10 21-23,0-13 * * *'
+  workflow_dispatch:
+    inputs:
+      debug:
+        description: 'スクリーンショットを保存する (公開リポジトリでは誰でも見られるので注意)'
+        type: boolean
+        default: false
+      line_test:
+        description: 'LINEにテスト通知だけ送る'
+        type: boolean
+        default: false
+
+concurrency:
+  group: check
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      EL_URL: ${{ secrets.EL_URL }}
+      EL_LOGIN_ID: ${{ secrets.EL_LOGIN_ID }}
+      EL_PASSWORD: ${{ secrets.EL_PASSWORD }}
+      LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
+      LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
+      EL_WEEKS: ${{ vars.EL_WEEKS || '2' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: LINEテスト通知
+        if: inputs.line_test
+        run: node src/line.js
+
+      - name: Playwright を準備
+        if: ${{ !inputs.line_test }}
+        run: |
+          npm ci --no-audit --no-fund
+          npx playwright install --with-deps chromium
+
+      # 前回見つけた枠を復元 (新しく増えた枠だけ通知するため)
+      - uses: actions/cache/restore@v4
+        if: ${{ !inputs.line_test }}
+        with:
+          path: state
+          key: state-${{ github.run_id }}
+          restore-keys: state-
+
+      - name: 予約状況をチェック
+        if: ${{ !inputs.line_test }}
+        run: node src/check.js
+        env:
+          DEBUG_DIR: ${{ inputs.debug && 'debug' || '' }}
+
+      - uses: actions/cache/save@v4
+        if: ${{ !inputs.line_test }}
+        with:
+          path: state
+          key: state-${{ github.run_id }}
+
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() && inputs.debug }}
+        with:
+          name: debug
+          path: debug
+          retention-days: 1

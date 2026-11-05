@@ -1,0 +1,13 @@
+{
+  "name": "driving-alert",
+  "private": true,
+  "description": "e-license の技能予約に空きが出たら LINE に通知する",
+  "scripts": {
+    "check": "node src/check.js",
+    "test": "node test/parse.test.js",
+    "line-test": "node src/line.js"
+  },
+  "dependencies": {
+    "playwright": "1.49.1"
+  }
+}
